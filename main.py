@@ -1,27 +1,33 @@
-from fastapi import FastAPI, UploadFile, File, Request
+import os, io, uuid, boto3, logging, traceback
+from dotenv import load_dotenv
+from botocore.exceptions import ClientError
+from logging.handlers import RotatingFileHandler
+from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
-from logging.handlers import RotatingFileHandler
-import logging, os, uuid, traceback
 
 # -------------------------------------------------------------------
-# Setup
+# Load environment variables
+# -------------------------------------------------------------------
+load_dotenv()
+
+# -------------------------------------------------------------------
+# Paths and setup
 # -------------------------------------------------------------------
 BASE_DIR = Path(__file__).parent
-UPLOAD_DIR = BASE_DIR / "uploads"
 STATIC_DIR = BASE_DIR / "static"
-LOG_FILE = BASE_DIR / "partyprint.log"
-
+UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 # -------------------------------------------------------------------
-# Logging
+# Logging setup
 # -------------------------------------------------------------------
+LOG_FILE = BASE_DIR / "partyprint.log"
 logger = logging.getLogger("partyprint")
 logger.setLevel(logging.INFO)
 
-# File handler with rotation (2 MB, 5 backups)
+# Rotating file handler (2 MB, 5 backups)
 fh = RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=5)
 fh.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s"))
 
@@ -35,21 +41,28 @@ logger.addHandler(ch)
 logger.info("=== PartyPrint server starting ===")
 
 # -------------------------------------------------------------------
-# App setup
+# FastAPI setup
 # -------------------------------------------------------------------
 app = FastAPI(title="PartyPrint Demo")
-
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-app.mount("/files", StaticFiles(directory=UPLOAD_DIR), name="files")
 
+# -------------------------------------------------------------------
+# AWS setup
+# -------------------------------------------------------------------
+AWS_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+BUCKET = os.getenv("S3_BUCKET")
+s3 = boto3.client("s3", region_name=AWS_REGION)
+
+# -------------------------------------------------------------------
+# Job storage (in-memory for demo)
+# -------------------------------------------------------------------
 jobs = []
 
 # -------------------------------------------------------------------
-# Routes
+# Middleware logging all requests
 # -------------------------------------------------------------------
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log every request for debugging."""
     logger.info(f"→ {request.method} {request.url.path}")
     try:
         response = await call_next(request)
@@ -60,6 +73,10 @@ async def log_requests(request: Request, call_next):
         logger.error(traceback.format_exc())
         return HTMLResponse("Internal Server Error", status_code=500)
 
+# -------------------------------------------------------------------
+# Routes
+# -------------------------------------------------------------------
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     index_file = STATIC_DIR / "index.html"
@@ -69,41 +86,40 @@ def index():
     logger.info("Serving index.html")
     return HTMLResponse(index_file.read_text())
 
-from fastapi import Form
-
 @app.post("/upload")
-async def upload(
-    image: UploadFile = File(...),
-    user: str = Form("Anonymous")
-):
-    """Handle uploads and enqueue them with user info"""
+async def upload(image: UploadFile = File(...), user: str = Form("Anonymous")):
+    """Handle uploads to S3 and enqueue job info."""
     job_id = str(uuid.uuid4())
     filename = f"{job_id}_{image.filename}"
-    path = UPLOAD_DIR / filename
 
-    logger.info(f"[UPLOAD] Receiving {filename} from {user}")
     try:
-        with open(path, "wb") as f:
-            f.write(await image.read())
+        # Upload to S3
+        s3.upload_fileobj(
+            io.BytesIO(await image.read()),
+            BUCKET,
+            filename,
+            ExtraArgs={"ContentType": image.content_type},
+        )
+        url = f"https://{BUCKET}.s3.amazonaws.com/{filename}"
 
         jobs.append({
             "id": job_id,
             "filename": filename,
-            "path": str(path),
             "user": user,
+            "url": url,
             "done": False
         })
 
-        logger.info(f"[UPLOAD] Saved {filename} ({path}) by {user}")
-        return {"ok": True, "id": job_id, "path": f"/files/{filename}", "user": user}
-    except Exception as e:
+        logger.info(f"[UPLOAD] {filename} uploaded by {user}")
+        return {"ok": True, "id": job_id, "path": url, "user": user}
+    except ClientError as e:
         logger.error(f"[UPLOAD ERROR] {filename}: {e}")
         return {"ok": False, "error": str(e)}
 
-
 @app.get("/queue")
 def queue():
-    logger.info(f"[QUEUE] {len(jobs)} total jobs, {sum(not j['done'] for j in jobs)} pending")
+    pending = sum(not j["done"] for j in jobs)
+    logger.info(f"[QUEUE] {len(jobs)} total jobs, {pending} pending")
     return {"jobs": jobs}
 
 @app.get("/next-job")
@@ -119,18 +135,8 @@ def next_job():
 @app.get("/gallery")
 def gallery():
     logger.info("[GALLERY] Building gallery view...")
-    images = []
     try:
-        for j in jobs:
-            path = j.get("path")
-            if not path:
-                logger.warning(f"[GALLERY] Skipping job without path: {j}")
-                continue
-            filename = os.path.basename(path)
-            images.append({
-                "path": f"/files/{filename}",
-                "user": j.get("user", "Anonymous")
-            })
+        images = [{"path": j["url"], "user": j.get("user", "Anonymous")} for j in jobs]
         logger.info(f"[GALLERY] Returned {len(images)} images.")
         return {"images": images}
     except Exception as e:
