@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PartyPrint Demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; text-align: center; margin: 2rem auto; max-width: 640px; }
+    video, img, canvas { width: 100%; max-width: 320px; margin: 1rem auto; border-radius: 8px; display: block; }
+    button { padding: .6rem 1.2rem; border: none; background: #000; color: #fff; border-radius: 6px; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    input[type=text] { padding: .5rem; border: 1px solid #ccc; border-radius: 4px; width: 200px; margin: .5rem; }
+    .queue, .gallery { text-align: left; margin-top: 2rem; border-top: 1px solid #ccc; padding-top: 1rem; }
+    .job { margin: .25rem 0; }
+    .done { opacity: .5; text-decoration: line-through; }
+    .gallery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: .5rem; }
+    .gallery-grid img { width: 100%; border-radius: 6px; }
+    h3 { margin-bottom: .5rem; }
+  </style>
+</head>
+<body>
+  <h1>📸 PartyPrint</h1>
+  <p>Snap → Upload → Print → Share!</p>
+
+  <input type="text" id="username" placeholder="Your name (optional)" />
+  <video id="preview" autoplay playsinline muted></video>
+  <button id="captureBtn">🎞️ Take Photo</button>
+
+  <p>or upload from your device:</p>
+  <input type="file" id="file" accept="image/*" />
+  <button id="sendBtn">Upload</button>
+  <div id="result"></div>
+
+  <div class="queue">
+    <h3>🖨️ Print Queue</h3>
+    <div id="queueList">Loading...</div>
+  </div>
+
+  <div class="gallery">
+    <h3>🎉 Party Gallery</h3>
+    <div id="galleryGrid" class="gallery-grid">Loading...</div>
+  </div>
+
+  <script>
+    const video = document.getElementById('preview');
+    const captureBtn = document.getElementById('captureBtn');
+    const sendBtn = document.getElementById('sendBtn');
+    const fileInput = document.getElementById('file');
+
+    async function initCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+      } catch {
+        document.getElementById('captureBtn').style.display = 'none';
+      }
+    }
+
+    captureBtn.addEventListener('click', async () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.9));
+      const formData = new FormData();
+      formData.append('image', blob, `capture_${Date.now()}.jpg`);
+      formData.append('user', document.getElementById('username').value || 'Anonymous');
+      await upload(formData);
+    });
+
+    sendBtn.addEventListener('click', async () => {
+      if (!fileInput.files.length) return alert('Select an image first!');
+      const formData = new FormData();
+      formData.append('image', fileInput.files[0]);
+      formData.append('user', document.getElementById('username').value || 'Anonymous');
+      await upload(formData);
+    });
+
+    async function upload(formData) {
+      sendBtn.disabled = true;
+      captureBtn.disabled = true;
+      const res = await fetch('/upload', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.ok) {
+        document.getElementById('result').innerHTML = `
+          <p>✅ Uploaded by <strong>${data.user}</strong></p>
+          <img src="${data.path}" />
+        `;
+        refreshQueue();
+        refreshGallery();
+      } else {
+        alert('Upload failed');
+      }
+      sendBtn.disabled = false;
+      captureBtn.disabled = false;
+    }
+
+    async function refreshQueue() {
+      const res = await fetch('/queue');
+      const data = await res.json();
+      const html = data.jobs.map(
+        (j, i) =>
+          `<div class="job ${j.done ? 'done' : ''}">#${i+1} — ${j.filename} (${j.user || 'Anonymous'})</div>`
+      ).join('');
+      document.getElementById('queueList').innerHTML = html || 'No jobs yet.';
+    }
+
+async function refreshGallery() {
+  try {
+    const res = await fetch('/gallery');
+    const data = await res.json();
+
+    console.log("Gallery response:", data); // ✅ See what’s returned
+
+    const images = data.images || [];
+    if (!images.length) {
+      document.getElementById('galleryGrid').innerHTML = '<p>No photos yet.</p>';
+      return;
+    }
+
+    // Generate gallery HTML
+    const html = images.map(
+      img => `
+        <div class="photo">
+          <img src="${img.path}" alt="${img.user}" title="${img.user}" />
+          <div style="font-size:.8rem; text-align:center; color:#666;">${img.user}</div>
+        </div>`
+    ).join('');
+
+    document.getElementById('galleryGrid').innerHTML = html;
+  } catch (err) {
+    console.error("Gallery refresh error:", err);
+    document.getElementById('galleryGrid').innerHTML = '<p>⚠️ Gallery error</p>';
+  }
+}
+
+
+    initCamera();
+    refreshQueue();
+    refreshGallery();
+    setInterval(refreshQueue, 5000);
+    setInterval(refreshGallery, 7000);
+  </script>
+</body>
+</html>
