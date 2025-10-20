@@ -1,0 +1,9 @@
+<pre id="log"></pre>
+<script>
+  const logEl = document.getElementById("log");
+  const evt = new EventSource("/stream_logs");
+  evt.onmessage = e => {
+    logEl.textContent += e.data + "\n";
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+</script>

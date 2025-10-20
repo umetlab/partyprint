@@ -1,28 +1,41 @@
-import time, requests, subprocess, os
+#!/usr/bin/env python3
+import requests, time, os, subprocess
+from pathlib import Path
 
-API_URL = "https://party.emits.ai/files"
-PRINTED_TRACKER = "/tmp/printed.log"
+SERVER = "https://party.emits.ai"  # main app domain
+DOWNLOAD_DIR = Path("/tmp/partyprints")
+DOWNLOAD_DIR.mkdir(exist_ok=True)
 
-printed = set()
-if os.path.exists(PRINTED_TRACKER):
-    printed = set(open(PRINTED_TRACKER).read().splitlines())
+def download_and_print(url, job_id):
+    """Download the image and send to local printer"""
+    local_path = DOWNLOAD_DIR / f"{job_id}.jpg"
+    r = requests.get(url, stream=True)
+    if r.status_code == 200:
+        with open(local_path, "wb") as f:
+            for chunk in r.iter_content(1024):
+                f.write(chunk)
+        print(f"📥 Downloaded {local_path}")
+        # print using system command (CUPS / lp)
+        subprocess.run(["lp", str(local_path)])
+        print("🖨️ Sent to printer.")
+        requests.post(f"{SERVER}/mark-printed/{job_id}")
+    else:
+        print(f"⚠️ Failed to download {url} (status {r.status_code})")
 
-while True:
-    try:
-        files = requests.get(API_URL, timeout=5).json()
-        for f in files:
-            name = f["name"]
-            if name not in printed:
-                print(f"🖨️ Printing {name}...")
-                url = f"https://party.emits.ai/files/{name}"
-                local_path = f"/tmp/{name}"
-                with open(local_path, "wb") as out:
-                    out.write(requests.get(url).content)
+def main():
+    print("🎉 PartyPrint client started — polling for print jobs...")
+    while True:
+        try:
+            r = requests.get(f"{SERVER}/next-job", timeout=10)
+            job = r.json()
+            if job.get("id"):
+                print(f"🆕 Printing job {job['id']} from {job['user']}")
+                download_and_print(job["url"], job["id"])
+            else:
+                time.sleep(3)
+        except Exception as e:
+            print("❌ Error polling:", e)
+            time.sleep(5)
 
-                subprocess.run(["lp", "-d", "Canon_CP1500", local_path])
-                printed.add(name)
-                open(PRINTED_TRACKER, "a").write(name + "\n")
-        time.sleep(5)
-    except Exception as e:
-        print("Error:", e)
-        time.sleep(10)
+if __name__ == "__main__":
+    main()

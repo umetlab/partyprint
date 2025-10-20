@@ -5,30 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PartyPrint Demo</title>
   <style>
-    body { font-family: system-ui, sans-serif; text-align: center; margin: 2rem auto; max-width: 640px; }
+    body { font-family: system-ui, sans-serif; text-align: center; margin: 2rem auto; max-width: 640px; background:#111; color:#eee; }
     video, img, canvas { width: 100%; max-width: 320px; margin: 1rem auto; border-radius: 8px; display: block; }
-    button { padding: .6rem 1.2rem; border: none; background: #000; color: #fff; border-radius: 6px; cursor: pointer; }
+    button { padding: .6rem 1.2rem; border: none; background: #ff6600; color: #fff; border-radius: 6px; cursor: pointer; font-weight:600; }
+    button:hover { background:#ff8800; }
     button:disabled { opacity: .6; cursor: not-allowed; }
-    input[type=text] { padding: .5rem; border: 1px solid #ccc; border-radius: 4px; width: 200px; margin: .5rem; }
-    .queue, .gallery { text-align: left; margin-top: 2rem; border-top: 1px solid #ccc; padding-top: 1rem; }
+    input[type=text] { padding: .5rem; border: 1px solid #444; border-radius: 4px; width: 200px; margin: .5rem; background:#222; color:#eee;}
+    .queue, .gallery { text-align: left; margin-top: 2rem; border-top: 1px solid #333; padding-top: 1rem; }
     .job { margin: .25rem 0; }
-    .done { opacity: .5; text-decoration: line-through; }
     .gallery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: .5rem; }
     .gallery-grid img { width: 100%; border-radius: 6px; }
-    h3 { margin-bottom: .5rem; }
+    h3 { margin-bottom: .5rem; color:#ff9900; }
   </style>
 </head>
 <body>
-  <h1>📸 PartyPrint</h1>
+  <h1>🎃 PartyPrint</h1>
   <p>Snap → Upload → Print → Share!</p>
 
   <input type="text" id="username" placeholder="Your name (optional)" />
   <video id="preview" autoplay playsinline muted></video>
-  <button id="captureBtn">🎞️ Take Photo</button>
+  <button id="captureBtn">📸 Take Photo</button>
 
   <p>or upload from your device:</p>
   <input type="file" id="file" accept="image/*" />
   <button id="sendBtn">Upload</button>
+
   <div id="result"></div>
 
   <div class="queue">
@@ -46,6 +47,7 @@
     const captureBtn = document.getElementById('captureBtn');
     const sendBtn = document.getElementById('sendBtn');
     const fileInput = document.getElementById('file');
+    let lastJobId = null;
 
     async function initCamera() {
       try {
@@ -82,10 +84,14 @@
       const res = await fetch('/upload', { method: 'POST', body: formData });
       const data = await res.json();
       if (data.ok) {
+        lastJobId = data.id;
         document.getElementById('result').innerHTML = `
           <p>✅ Uploaded by <strong>${data.user}</strong></p>
           <img src="${data.path}" />
+          <button id="printBtn">🖨️ Print This Photo</button>
+          <div id="printStatus"></div>
         `;
+        document.getElementById('printBtn').addEventListener('click', triggerPrint);
         refreshQueue();
         refreshGallery();
       } else {
@@ -93,6 +99,19 @@
       }
       sendBtn.disabled = false;
       captureBtn.disabled = false;
+    }
+
+    async function triggerPrint() {
+      const statusEl = document.getElementById('printStatus');
+      statusEl.textContent = '⏳ Sending to printer...';
+      const res = await fetch(`/print/${lastJobId}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) {
+        statusEl.textContent = '🖨️ Sent! Your photo is printing.';
+      } else {
+        statusEl.textContent = '⚠️ Print failed.';
+      }
+      refreshQueue();
     }
 
     async function refreshQueue() {
@@ -105,35 +124,27 @@
       document.getElementById('queueList').innerHTML = html || 'No jobs yet.';
     }
 
-async function refreshGallery() {
-  try {
-    const res = await fetch('/gallery');
-    const data = await res.json();
-
-    console.log("Gallery response:", data); // ✅ See what’s returned
-
-    const images = data.images || [];
-    if (!images.length) {
-      document.getElementById('galleryGrid').innerHTML = '<p>No photos yet.</p>';
-      return;
+    async function refreshGallery() {
+      try {
+        const res = await fetch('/gallery');
+        const data = await res.json();
+        const images = data.images || [];
+        if (!images.length) {
+          document.getElementById('galleryGrid').innerHTML = '<p>No photos yet.</p>';
+          return;
+        }
+        const html = images.map(
+          img => `
+            <div class="photo">
+              <img src="${img.path}" alt="${img.user}" title="${img.user}" />
+              <div style="font-size:.8rem; text-align:center; color:#666;">${img.user}</div>
+            </div>`
+        ).join('');
+        document.getElementById('galleryGrid').innerHTML = html;
+      } catch (err) {
+        document.getElementById('galleryGrid').innerHTML = '<p>⚠️ Gallery error</p>';
+      }
     }
-
-    // Generate gallery HTML
-    const html = images.map(
-      img => `
-        <div class="photo">
-          <img src="${img.path}" alt="${img.user}" title="${img.user}" />
-          <div style="font-size:.8rem; text-align:center; color:#666;">${img.user}</div>
-        </div>`
-    ).join('');
-
-    document.getElementById('galleryGrid').innerHTML = html;
-  } catch (err) {
-    console.error("Gallery refresh error:", err);
-    document.getElementById('galleryGrid').innerHTML = '<p>⚠️ Gallery error</p>';
-  }
-}
-
 
     initCamera();
     refreshQueue();
