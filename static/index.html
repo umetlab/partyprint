@@ -114,15 +114,18 @@
       refreshQueue();
     }
 
-    async function refreshQueue() {
-      const res = await fetch('/queue');
-      const data = await res.json();
-      const html = data.jobs.map(
-        (j, i) =>
-          `<div class="job ${j.done ? 'done' : ''}">#${i+1} — ${j.filename} (${j.user || 'Anonymous'})</div>`
-      ).join('');
-      document.getElementById('queueList').innerHTML = html || 'No jobs yet.';
-    }
+async function refreshQueue() {
+  const res = await fetch('/jobs');
+  const data = await res.json();
+  const html = data.jobs.map(
+    (j, i) =>
+      `<div class="job ${j.status === 'printed' ? 'done' : ''}">
+         #${i+1} — ${j.filename} (${j.user || 'Anonymous'}) — ${j.status}
+       </div>`
+  ).join('');
+  document.getElementById('queueList').innerHTML = html || 'No jobs yet.';
+}
+
 
     async function refreshGallery() {
       try {

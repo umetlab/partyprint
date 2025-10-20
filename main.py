@@ -195,6 +195,53 @@ def gallery():
         logger.error(f"[GALLERY ERROR] {e}")
         logger.error(traceback.format_exc())
         return {"error": str(e), "images": []}
+    
+
+from fastapi.responses import FileResponse
+
+@app.get("/admin/jobs")
+def admin_jobs():
+    """Return all jobs for the admin dashboard."""
+    rows = db_query("SELECT id, filename, user, url, status, created_at FROM jobs ORDER BY created_at DESC", fetch=True)
+    return {"jobs": [dict(zip(["id", "filename", "user", "url", "status", "created_at"], r)) for r in rows]}
+
+
+@app.post("/admin/print/{job_id}")
+def admin_trigger_print(job_id: str):
+    """Queue job for print (admin trigger)."""
+    db_query("UPDATE jobs SET status = 'queued' WHERE id = ?", (job_id,))
+    logger.info(f"[ADMIN] Job {job_id} queued for print.")
+    return {"ok": True}
+
+
+@app.post("/admin/mark-printed/{job_id}")
+def admin_mark_printed(job_id: str):
+    """Mark job as printed (admin confirm)."""
+    db_query("UPDATE jobs SET status = 'printed' WHERE id = ?", (job_id,))
+    logger.info(f"[ADMIN] Job {job_id} marked printed.")
+    return {"ok": True}
+
+
+@app.delete("/admin/delete/{job_id}")
+def admin_delete_job(job_id: str):
+    """Delete job from DB and S3."""
+    row = db_query("SELECT filename FROM jobs WHERE id = ?", (job_id,), fetch=True)
+    if not row:
+        return JSONResponse({"ok": False, "error": "Job not found"}, status_code=404)
+    filename = row[0][0]
+
+    # Delete from S3
+    try:
+        s3.delete_object(Bucket=BUCKET, Key=filename)
+        logger.info(f"[ADMIN] Deleted {filename} from S3.")
+    except Exception as e:
+        logger.warning(f"[ADMIN] Could not delete {filename} from S3: {e}")
+
+    # Delete DB record
+    db_query("DELETE FROM jobs WHERE id = ?", (job_id,))
+    logger.info(f"[ADMIN] Job {job_id} deleted from DB.")
+    return {"ok": True}
+
 
 
 # -------------------------------------------------------------------
